@@ -11,6 +11,10 @@ module Sinatra
   # The request object. See Rack::Request for more info:
   # http://rack.rubyforge.org/doc/classes/Rack/Request.html
   class Request < Rack::Request
+    def self.new(env)
+      env['sinatra.request'] ||= super
+    end
+
     # Returns an array of acceptable media types for the response
     def accept
       @env['sinatra.accept'] ||= begin
@@ -1261,10 +1265,10 @@ module Sinatra
       # an instance of this class as end point.
       def build(*args, &bk)
         builder = Rack::Builder.new
-        setup_logging  builder
-        setup_sessions builder
         builder.use Rack::MethodOverride if method_override?
         builder.use ShowExceptions       if show_exceptions?
+        setup_logging  builder
+        setup_sessions builder
         middleware.each { |c,a,b| builder.use(c, *a, &b) }
         builder.run new!(*args, &bk)
         builder
