@@ -1,36 +1,73 @@
 require 'sinatra/base'
-require 'uri'
 
 module Sinatra
-  class Request
-    SAFE_METHODS = %w[GET HEAD OPTIONS TRACE]
-
-    def safe?
-      SAFE_METHODS.include? request_method
-    end
-  end
-
   class CsrfProtection
-    def initialize(app, base = Sinatra::Base)
-      @app, @base = app, base
+    SAFE_METHODS = %w[GET HEAD OPTIONS TRACE]
+    TOKEN_HEADER = 'HTTP_X_CSRF_Token'
+    TOKEN_FIELD  = 'authenticity_token'
+
+    module Helpers
+      def authenticity_token
+        session['sinatra.token']
+      end
+
+      def authenticity_tag
+        return "" unless authenticity_token
+        "<input type='hidden' name='#{TOKEN_FIELD}' value='#{authenticity_token}' />"
+      end
+
+      alias csrf_token authenticity_token
+      alias csrf_tag   authenticity_tag
+    end
+
+    def initialize(app, base = Sinatra::Base, checks = nil)
+      @app, @base, @checks = app, base, Array(checks)
     end
 
     def call(env)
-      r = Sinatra::Request.new env
-      if r.safe? or !r.referrer or URI.parse(r.referrer).host == r.host
-        @app.call env
-      else
-        response
-      end
+      request = Sinatra::Request.new env
+      set_token(request) if @mode.include? :token
+      safe?(request) ? @app.call(env) : response(request)
     end
 
-    def response
-      error = 'Potentinal CSRF attack prevented!'
+    private
+
+    def set_token(request)
+      request.session['sinatra.token'] ||= '%x' % rand(2**255)
+    end
+
+    def safe?(r)
+      checks.any? { |c| send("safe_#{m}?", r) }
+    end
+
+    def safe_method?(r)
+      SAFE_METHODS.include? r.request_method
+    end
+
+    def safe_token?(r)
+      token = request.session['sinatra.token']
+      r.env[TOKEN_HEADER] == token or r[TOKEN_FIELD] == token
+    end
+
+    def safe_forms?(r)
+      request.xhr? or safe_token?(r)
+    end
+
+    def safe_referrer?(r)
+       URI.parse(r.referrer.to_s).host == r.host
+    end
+
+    alias safe_referer? safe_referrer?
+
+    def safe_optional_referrer?(r)
+      r.referrer.nil? or safe_referrer?(r)
+    end
+
+    def response(r)
       fail error if @base.test?
       response = Rack::Response.new
       response.status = 412
       if @base.development?
-        response['Content-Type'] = 'text/html'
         response.body << <<-HTML.gsub(/^ {10}/, '')
           <!DOCTYPE html>
           <html>
@@ -42,8 +79,8 @@ module Sinatra
               </style>
             </head>
             <body>
-              <h2>#{error}</h2>
-              <img src='/__sinatra__/500.png'>
+              <h2>Potentinal CSRF attack prevented!</h2>
+              <img src='#{r.script_name}/__sinatra__/500.png'>
               <div id="c">
                 <p>
                   Sinatra automatically blocks unsafe requests coming from other
@@ -52,13 +89,14 @@ module Sinatra
                   add the following line to your Sinatra application:
                 </p>
                 <pre>disable :csrf_protection</pre>
+                <p>
+                  You can also change the CSRF counter measures like this:
+                </p>
+                <pre>set :csrf_protection, :token</pre>
               </div>
             </body>
           </html>
         HTML
-      else
-        response['Content-Type'] = 'text/plain'
-        response.body << error
       end
       response.finish
     end

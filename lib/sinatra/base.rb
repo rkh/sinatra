@@ -3,6 +3,7 @@ require 'time'
 require 'uri'
 require 'sinatra/rack'
 require 'sinatra/showexceptions'
+require 'sinatra/csrf_protection'
 require 'tilt'
 
 module Sinatra
@@ -1267,8 +1268,9 @@ module Sinatra
         builder = Rack::Builder.new
         builder.use Rack::MethodOverride if method_override?
         builder.use ShowExceptions       if show_exceptions?
-        setup_logging  builder
-        setup_sessions builder
+        setup_logging    builder
+        setup_sessions   builder
+        setup_protection builder
         middleware.each { |c,a,b| builder.use(c, *a, &b) }
         builder.run new!(*args, &bk)
         builder
@@ -1297,6 +1299,17 @@ module Sinatra
         options = { :secret => session_secret }
         options.merge! sessions.to_hash if sessions.respond_to? :to_hash
         builder.use Rack::Session::Cookie, options
+      end
+
+      def setup_protection(builder)
+        return unless csrf_protection?
+        checks = [:verb] # let safe methods like GET through
+        if csrf_protection == true
+          checks << :optional_referrer
+        else
+          checks.concat Array(csrf_protection)
+        end
+        builder.use Sinatra::CsrfProtection, self, checks
       end
 
       def detect_rack_handler
@@ -1397,6 +1410,7 @@ module Sinatra
 
     # explicitly generating this eagerly to play nice with preforking
     set :session_secret, '%x' % rand(2**255)
+    set :csrf_protection, true
 
     class << self
       alias_method :methodoverride?, :method_override?
